@@ -1,0 +1,9 @@
+{
+    "Technology": ["NVDA", "AMD", "PLTR"],
+    "Medical/Biotech": ["CRSP", "RXRX", "NTLA"],
+    "Minerals/Energy": ["MP", "LAC", "AREC"],
+    "Consumables": ["VITL", "HIMS", "CALM"],
+    "Niche/Wildcard": ["RKLB", "JOBY", "LUNR"],
+    "Technology": ["NVDA", "AMD", "PLTR", "IONQ"]
+
+}

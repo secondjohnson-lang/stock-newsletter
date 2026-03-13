@@ -1,0 +1,6 @@
+date,ticker,company,score,criteria_met,short_interest,float_m,volume_spike,catalyst_detected,conviction,price,verdict
+2026-03-12,CHPT,"ChargePoint Holdings, Inc.",82,4,17.6,22.1,58,YES,HIGH,5.520,
+2026-03-12,NTLA,"Intellia Therapeutics, Inc.",87,3,42.0,111.9,63,YES,MEDIUM,13.010,
+2026-03-12,EDIT,"Editas Medicine, Inc.",72,3,12.2,97.5,106,YES,MEDIUM,2.660,
+2026-03-12,NBIS,NBIS,63,3,20.1,211.9,269,NO,MEDIUM,111.995,
+2026-03-12,QBTS,D-Wave Quantum Inc.,45,3,15.0,360.0,57,YES,LOW,18.910,
