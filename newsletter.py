@@ -13,7 +13,7 @@ with open("watchlist.json", "r") as f:
 
 
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
-MODEL = "google/gemma-3-27b-it:free"
+MODEL = "openrouter/hunter-alpha"
 
 def score_stock(ticker):
     try:
