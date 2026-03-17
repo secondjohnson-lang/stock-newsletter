@@ -1,19 +1,97 @@
-from ast import Import
-
 import yfinance as yf
 import os
 import requests
 import time
 import re
-
 import json
+import sqlite3
+from datetime import date
 
 with open("watchlist.json", "r") as f:
     watchlist = json.load(f)
 
-
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
-MODEL = "google/gemma-3-27b-it:free"
+MODEL = "openrouter/hunter-alpha"
+
+def init_db():
+    conn = sqlite3.connect("stocks.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS daily_scores (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT,
+            ticker TEXT,
+            price REAL,
+            day_change REAL,
+            momentum_5d REAL,
+            safety_from_low REAL,
+            vol_ratio REAL,
+            score INTEGER,
+            signal INTEGER
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS top_picks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT,
+            ticker TEXT,
+            price REAL,
+            signal INTEGER,
+            odds TEXT,
+            target TEXT,
+            confidence INTEGER,
+            story TEXT,
+            bear TEXT,
+            outcome TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+def save_score(result):
+    conn = sqlite3.connect("stocks.db")
+    cursor = conn.cursor()
+    display_score = (result['score'] - 50) * 2
+    cursor.execute("""
+        INSERT INTO daily_scores
+        (date, ticker, price, day_change, momentum_5d, safety_from_low, vol_ratio, score, signal)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        str(date.today()),
+        result['ticker'],
+        result['price'],
+        result['day_change'],
+        result['momentum_5d'],
+        result['safety_from_low'],
+        result['vol_ratio'],
+        result['score'],
+        display_score
+    ))
+    conn.commit()
+    conn.close()
+
+def save_pick(pick, parsed):
+    conn = sqlite3.connect("stocks.db")
+    cursor = conn.cursor()
+    display_score = (pick['score'] - 50) * 2
+    cursor.execute("""
+        INSERT INTO top_picks
+        (date, ticker, price, signal, odds, target, confidence, story, bear, outcome)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        str(date.today()),
+        pick['ticker'],
+        pick['price'],
+        display_score,
+        parsed.get('ODDS', ''),
+        parsed.get('TARGET', ''),
+        int(parsed.get('CONFIDENCE', '0') or '0'),
+        parsed.get('STORY', ''),
+        parsed.get('BEAR', ''),
+        'pending'
+    ))
+    conn.commit()
+    conn.close()
 
 def score_stock(ticker):
     try:
@@ -51,12 +129,18 @@ def score_stock(ticker):
     except:
         return None
 
-SYSTEM_PROMPT = """You are a quantitative stock analyst assistant. Your entire job is to analyze stock signal data and return structured analysis in a specific format.
+SYSTEM_PROMPT = """You are a financial newsletter writer and quantitative analyst. You write for curious, intelligent readers who are not finance professionals. Your job is to analyze stock signal data and return structured analysis in a specific format.
 
-You have three hard rules you never break:
-1. You always respond in the exact format requested. No preamble, no explanation, no extra text.
+You have four hard rules you never break:
+1. You always respond in the exact format requested. No preamble, no explanation, no extra text before ODDS.
 2. You never recommend a stock with a day change worse than -8% unless the 5-day momentum is strongly positive.
 3. You always assign lower confidence when signals contradict each other.
+4. Your STORY must always follow this exact five sentence structure:
+   - Sentence 1: What the company does in plain english, no jargon
+   - Sentence 2: Why this company matters to the US economy or a major trend
+   - Sentence 3: One surprising or interesting fact about the company or its sector
+   - Sentence 4: What is happening with this stock right now and why
+   - Sentence 5: Forward looking — where could this go and why should someone care
 
 You understand moneyline odds:
 - +200 means a 20% gain in 60 days is unlikely but possible
@@ -78,18 +162,16 @@ def build_prompt(pick):
         contradictions.append("high score but significant daily drop")
     if pick['vol_ratio'] < 0.5 and pick['score'] > 70:
         contradictions.append("high score but very low volume")
-
     contradiction_note = ""
     if contradictions:
         contradiction_note = f"\nWARNING - Contradicting signals detected: {', '.join(contradictions)}"
-
     return f"""Analyze this stock and respond in EXACTLY this format, no other text:
 
 ODDS: [moneyline number only, e.g. +150 or -110]
 TARGET: $[dollar amount only, e.g. $184.20]
 CONFIDENCE: [single number 1-5 only]
-THESIS: [exactly 2 sentences]
-BEAR: [exactly 1 sentence]
+STORY: [exactly 5 sentences following the structure in your instructions]
+BEAR: [exactly 1 sentence about the biggest risk to this trade]
 
 Stock data:
 TICKER: {pick['ticker']}
@@ -101,7 +183,7 @@ VOLUME_RATIO: {pick['vol_ratio']}x
 SCORE: {pick['score']}/100{contradiction_note}"""
 
 def validate_response(text):
-    required = ["ODDS:", "TARGET:", "CONFIDENCE:", "THESIS:", "BEAR:"]
+    required = ["ODDS:", "TARGET:", "CONFIDENCE:", "STORY:", "BEAR:"]
     for field in required:
         if field not in text:
             return False, f"Missing field: {field}"
@@ -130,10 +212,10 @@ def get_analysis(pick):
                 json={
                     "model": MODEL,
                     "messages": [
-    {"role": "system", "content": SYSTEM_PROMPT},
-    {"role": "user", "content": prompt}
-],
-                    "max_tokens": 200,
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": prompt}
+                    ],
+                    "max_tokens": 400,
                     "temperature": 0.3
                 }
             )
@@ -162,11 +244,27 @@ def get_analysis(pick):
 
 def parse_analysis(text):
     lines = {}
+    current_key = None
+    current_value = []
     for line in text.strip().split('\n'):
         if ':' in line:
-            key, _, value = line.partition(':')
-            lines[key.strip()] = value.strip()
+            first_word = line.split(':')[0].strip()
+            if first_word in ['ODDS', 'TARGET', 'CONFIDENCE', 'STORY', 'BEAR']:
+                if current_key:
+                    lines[current_key] = ' '.join(current_value).strip()
+                current_key = first_word
+                current_value = [line.partition(':')[2].strip()]
+            else:
+                if current_key:
+                    current_value.append(line.strip())
+        else:
+            if current_key:
+                current_value.append(line.strip())
+    if current_key:
+        lines[current_key] = ' '.join(current_value).strip()
     return lines
+
+init_db()
 
 print("\n====== YOUR MORNING WATCHLIST ======\n")
 
@@ -178,7 +276,10 @@ for sector, tickers in watchlist.items():
         result = score_stock(ticker)
         if result:
             arrow = "▲" if result['day_change'] > 0 else "▼"
-            print(f"  {result['ticker']:<6} ${result['price']:<10} {arrow} {result['day_change']}%  |  Score: {result['score']}/100")
+            display_score = (result['score'] - 50) * 2
+            sign = "+" if display_score >= 0 else ""
+            print(f"  {result['ticker']:<6} ${result['price']:<10} {arrow} {result['day_change']}%  |  Signal: {sign}{display_score}")
+            save_score(result)
             all_picks.append(result)
         else:
             print(f"  {ticker:<6} data unavailable")
@@ -188,7 +289,9 @@ top3 = sorted(all_picks, key=lambda x: x['score'], reverse=True)[:3]
 
 print("====== TOP 3 PICKS TODAY ======\n")
 for i, pick in enumerate(top3, 1):
-    print(f"{i}. {pick['ticker']} — Score {pick['score']}/100 | ${pick['price']}")
+    display_score = (pick['score'] - 50) * 2
+    sign = "+" if display_score >= 0 else ""
+    print(f"{i}. {pick['ticker']} — Signal {sign}{display_score} | ${pick['price']}")
     analysis, error = get_analysis(pick)
     if analysis:
         parsed = parse_analysis(analysis)
@@ -197,10 +300,23 @@ for i, pick in enumerate(top3, 1):
         print(f"   ODDS:       {parsed.get('ODDS', 'N/A')}")
         print(f"   TARGET:     {parsed.get('TARGET', 'N/A')}")
         print(f"   CONFIDENCE: {confidence_bar} {confidence}/5")
-        print(f"   THESIS:     {parsed.get('THESIS', 'N/A')}")
+        print(f"   STORY:")
+        story = parsed.get('STORY', 'N/A')
+        words = story.split()
+        line = ""
+        for word in words:
+            if len(line) + len(word) + 1 > 80:
+                print(f"      {line}")
+                line = word
+            else:
+                line = f"{line} {word}".strip()
+        if line:
+            print(f"      {line}")
         print(f"   BEAR:       {parsed.get('BEAR', 'N/A')}")
+        save_pick(pick, parsed)
     else:
         print(f"   Analysis unavailable: {error}")
     print()
 
 print("====================================\n")
+print(f"Data saved to stocks.db — {str(date.today())}")
