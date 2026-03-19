@@ -1,1 +1,5 @@
+.env
 stocks.db
+__pycache__/
+*.pyc
+newsletter_*.html

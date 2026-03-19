@@ -14,8 +14,8 @@ $diff = git diff --cached --stat
 $prompt = "You are a developer writing a git commit message. Based on these file changes, write a single clear commit message under 10 words that describes what was updated. No preamble, no quotes, just the message.`n`nChanges:`n$diff"
 
 $body = @{
-    model = "openrouter/hunter-alpha"
-    messages = @(
+    model      = "openrouter/hunter-alpha"
+    messages   = @(
         @{ role = "user"; content = $prompt }
     )
     max_tokens = 50
@@ -23,7 +23,7 @@ $body = @{
 
 $headers = @{
     "Authorization" = "Bearer $env:OPENROUTER_API_KEY"
-    "Content-Type" = "application/json"
+    "Content-Type"  = "application/json"
 }
 
 Write-Host "Generating commit message..." -ForegroundColor Cyan
@@ -31,7 +31,8 @@ Write-Host "Generating commit message..." -ForegroundColor Cyan
 try {
     $response = Invoke-RestMethod -Uri "https://openrouter.ai/api/v1/chat/completions" -Method Post -Headers $headers -Body $body
     $message = $response.choices[0].message.content.Trim()
-} catch {
+}
+catch {
     $message = "Update project files"
 }
 
@@ -42,12 +43,3 @@ git push origin main
 
 Write-Host "`nPushed successfully" -ForegroundColor Green
 pause
-```
-
-Save as `push.ps1` in AI_Projects.
-
-Once all three files are saved, run:
-```
-git add .
-git commit -m "Restore generator and automation scripts"
-git push origin main --force
