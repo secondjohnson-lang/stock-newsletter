@@ -11,7 +11,12 @@ with open("watchlist.json", "r") as f:
     watchlist = json.load(f)
 
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
-MODEL = "openrouter/hunter-alpha"
+MODELS = [
+    "nvidia/nemotron-3-super-120b-a12b:free",
+    "google/gemma-2-9b-it:free",
+    "meta-llama/llama-3.2-3b-instruct:free",
+    "mistralai/mistral-7b-instruct:free"
+]
 
 def init_db():
     conn = sqlite3.connect("stocks.db")
@@ -200,47 +205,50 @@ def validate_response(text):
 
 def get_analysis(pick):
     prompt = build_prompt(pick)
-    for attempt in range(3):
-        try:
-            time.sleep(3)
-            response = requests.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-                    "Content-Type": "application/json"
-                },
-                json={
-                    "model": MODEL,
-                    "messages": [
-                        {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user", "content": prompt}
-                    ],
-                    "max_tokens": 400,
-                    "temperature": 0.3
-                }
-            )
-            data = response.json()
-            if 'choices' not in data:
-                if attempt < 2:
+    for model in MODELS:
+        for attempt in range(2):
+            try:
+                time.sleep(3)
+                response = requests.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "model": model,
+                        "messages": [
+                            {"role": "system", "content": SYSTEM_PROMPT},
+                            {"role": "user", "content": prompt}
+                        ],
+                        "max_tokens": 400,
+                        "temperature": 0.3
+                    }
+                )
+                data = response.json()
+                if 'choices' not in data:
+                    if attempt < 1:
+                        time.sleep(5)
+                        continue
+                    break # Move to next model
+                content = data['choices'][0]['message'].get('content', '')
+                if not content:
+                    if attempt < 1:
+                        continue
+                    break # Move to next model
+                is_valid, reason = validate_response(content)
+                if is_valid:
+                    return content.strip(), None
+                else:
+                    if attempt < 1:
+                        continue
+                    break # Move to next model
+            except Exception as e:
+                if attempt < 1:
                     time.sleep(5)
                     continue
-                return None, f"API error: {data.get('error', {}).get('message', 'unknown')}"
-            content = data['choices'][0]['message'].get('content', '')
-            if not content:
-                continue
-            is_valid, reason = validate_response(content)
-            if is_valid:
-                return content.strip(), None
-            else:
-                if attempt < 2:
-                    continue
-                return None, f"Invalid format after 3 attempts: {reason}"
-        except Exception as e:
-            if attempt < 2:
-                time.sleep(5)
-                continue
-            return None, f"Exception: {e}"
-    return None, "Max retries exceeded"
+                break # Move to next model
+    return None, "All models failed or max retries exceeded"
 
 def parse_analysis(text):
     lines = {}
